@@ -107,9 +107,15 @@ The instructive experiment is to change `estimated_rank`:
 
 | `estimated_rank` | Reconstruction error | Reading |
 | --- | --- | --- |
-| 1 | ≈ 967 | Under-ranked — a real singular direction was discarded. This is what an undersized LoRA `r` feels like in practice. |
+| 1 | ≈ 900–1000 | Under-ranked — a real singular direction was discarded. This is what an undersized LoRA `r` feels like in practice. |
 | 2 | ≈ 1e-12 | Exact. The smallest rank that loses nothing. |
 | 3 | ≈ 1e-12 | Also exact, but the third direction carries no signal — wasted parameters. |
+
+The error at `estimated_rank = 1` is not an arbitrary number: it equals the discarded second
+singular value, to every digit. That is the Eckart–Young theorem — truncating an SVD is
+provably the *best* approximation of that rank, and the error it leaves behind is exactly
+the energy you threw away. Rounded values differ between runs only because the matrices are
+freshly random each time.
 
 Real weight updates are never *exactly* low-rank, which is why choosing `r` in a real LoRA
 run is an empirical trade-off rather than a clean cliff. But the mechanism is the one above.
