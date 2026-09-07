@@ -1,0 +1,13 @@
+instruction,input,output
+Summarize the following text in one sentence.,The rain in Spain stays mainly in the plain.,Rain in Spain falls in the plain.
+Answer the question based on the text.,Who is the president of the United States who won the 2024 election?,Donald Trump.
+Translate the following English text to French.,The cat is sleeping on the warm windowsill.,Le chat dort sur le rebord de fenêtre chaud.
+Extract the main topic from the given paragraph.,"Climate change refers to long-term shifts in global temperatures and weather patterns. While climate variations occur naturally, scientific evidence shows that human activities, particularly burning fossil fuels, have been the primary driver of climate change since the 1800s.",Climate change
+"Classify the sentiment of this review as positive, negative, or neutral.","This restaurant was absolutely terrible! The food was cold, the service was rude, and we waited over an hour for our meal. I would never recommend this place to anyone.",Negative
+Rewrite the sentence to make it more formal.,"Hey, can you help me out with this thing?",Could you please assist me with this matter?
+List three key facts from the provided information.,"Python is a high-level programming language created by Guido van Rossum in 1991. It emphasizes code readability and simplicity. Python supports multiple programming paradigms including procedural, object-oriented, and functional programming.","Python was created by Guido van Rossum in 1991, it emphasizes code readability, and it supports multiple programming paradigms."
+Convert the following recipe instruction into a question.,Preheat the oven to 350 degrees Fahrenheit.,What temperature should you preheat the oven to?
+Identify the grammatical error in this sentence and correct it.,The students was excited about there upcoming field trip to the museum.,The students were excited about their upcoming field trip to the museum.
+Paraphrase the following statement using simpler language.,The individual demonstrated exceptional proficiency in the utilization of advanced computational methodologies.,The person was very good at using advanced computer methods.
+Generate a creative title for this story summary.,"A young wizard discovers a hidden magical academy where students learn to control the elements, but dark forces threaten to destroy the school and everyone in it.",Elemental Academy: Rise of the Dark Forces
+Determine whether this claim is true or false based on the context.,All birds can fly. Context: Penguins are flightless birds that live in Antarctica.,False
