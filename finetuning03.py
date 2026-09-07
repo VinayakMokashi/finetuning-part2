@@ -1,7 +1,7 @@
 from peft import get_peft_model, LoraConfig, PeftType
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
 from datasets import load_dataset
-import torch 
+import torch
 import numpy as np
 
 
@@ -22,10 +22,10 @@ class PEFTSentimentClassifier:
 
     def setup_tokenizer(self):
         return AutoTokenizer.from_pretrained(self.model_name)
-    
+
     def setup_base_model(self):
         return AutoModelForSequenceClassification.from_pretrained(self.model_name, num_labels=2)
-    
+
     def setup_peft_config(self):
         return LoraConfig(
             peft_type=PeftType.LORA,
@@ -34,25 +34,25 @@ class PEFTSentimentClassifier:
             lora_alpha=32,
             lora_dropout=0.1,
         )
-    
+
     def setup_peft_model(self):
         return get_peft_model(self.base_model, self.peft_config)
-    
+
     def load_dataset(self):
         return load_dataset("stanfordnlp/imdb")
-    
+
     def create_train_subset(self):
         return self.dataset["train"].shuffle(seed=42).select(range(500))
-    
+
     def create_test_subset(self):
         return self.dataset["test"].shuffle(seed=42).select(range(100))
-    
+
     def tokenize_function(self, examples):
         return self.tokenizer(examples["text"], padding="max_length", truncation=True)
-    
+
     def tokenize_dataset(self, dataset):
         return dataset.map(self.tokenize_function, batched=True)
-    
+
     def setup_training_args(self):
         return TrainingArguments(
             output_dir="./peft_results",
@@ -61,7 +61,7 @@ class PEFTSentimentClassifier:
             per_device_train_batch_size=8,
             num_train_epochs=1,
         )
-    
+
     def setup_trainer(self):
         return Trainer(
             model=self.model,
@@ -69,10 +69,10 @@ class PEFTSentimentClassifier:
             train_dataset=self.tokenized_train,
             eval_dataset=self.tokenized_test,
         )
-    
+
     def evaluate_model(self):
         return self.trainer.evaluate()
-    
+
     def train_model(self):
         self.trainer.train()
 
@@ -97,7 +97,7 @@ class PEFTSentimentClassifier:
                 total_loss += loss * batch_size
 
                 num_examples += batch_size
-        
+
         return total_loss / num_examples
 
     def cross_entropy_loss(self, logits, labels):
@@ -111,7 +111,7 @@ class PEFTSentimentClassifier:
         shifted_logits = logits - np.max(logits, axis=1, keepdims=True)
         exp_logits = np.exp(shifted_logits)
         probs = exp_logits / np.sum(exp_logits, axis=1, keepdims=True)
-        eps = 1e-12  
+        eps = 1e-12
         log_probs = np.log(probs + eps)
         loss = -np.sum(labels_one_hot * log_probs) / batch_size
         return loss
