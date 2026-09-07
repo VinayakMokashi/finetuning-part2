@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Training output (checkpoints are large; regenerate by re-running the scripts)
+peft_results/
+instruction_result/
+models/
+results/
+runs/
+logs/
+wandb/
+*.ckpt
+*.safetensors
+*.bin
+*.log
+
+# Hugging Face / dataset caches
+.cache/
+cache/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets
+.env
+.env.*
+!.env.example
