@@ -1,5 +1,6 @@
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, Trainer, TrainingArguments
 from datasets import Dataset
+from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 import numpy as np
@@ -28,7 +29,10 @@ class FineTuneInstructionModel:
         return AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
 
     def load_dataset(self):
-        df = pd.read_csv('finetune_instruction_data.csv')
+        # Resolved against this file, not the working directory, so the script
+        # runs correctly from anywhere.
+        csv_path = Path(__file__).parent / "finetune_instruction_data.csv"
+        df = pd.read_csv(csv_path)
         return Dataset.from_pandas(df)
 
     def load_dataset_dict(self):
