@@ -1,0 +1,17 @@
+# Core deep-learning stack
+torch>=2.2
+transformers>=5.0
+accelerate>=1.1.0
+
+# finetuning03.py: LoRA / parameter-efficient fine-tuning
+peft>=0.17
+
+# Datasets and tokenisation
+datasets>=4.0
+huggingface-hub>=1.0
+
+# finetuning04.py: reading the instruction dataset from CSV
+pandas>=2.0
+
+# finetuning_low_rank.py and the manual cross-entropy implementations
+numpy>=1.26
