@@ -270,10 +270,11 @@ average). Examples with longer targets carry more weight in the second.
 This was checked directly. On one run, the two evaluation rows scored 3.9070 and 3.7611 over
 11 and 4 real target tokens respectively. Averaging them per example gives 3.8340; weighting
 them by token count gives 3.8681 — and the `Trainer` reported `eval_loss` of 3.868 on that
-same run. Neither number is wrong; they answer slightly different questions. (Because
-dropout is not seeded, the absolute values move between runs, so do not expect the figures
-above to line up with the ones printed in the next section — the *relationship* between them
-is the reproducible part.)
+same run. Neither number is wrong; they answer slightly different questions.
+
+Those figures come from a run that skipped the pre-training measurement, so they do not line
+up with the ones in the next section. That is not noise — see
+[Reproducibility](#reproducibility).
 
 ### What to expect
 
@@ -343,17 +344,38 @@ Part 1 step for step, or raise `num_train_epochs` until the update counts line u
 What this run *does* establish is the parameter accounting: a 110M-parameter model was
 adapted by training 296,450 weights, and the loss moved in the right direction.
 
+### Reproducibility
+
+These scripts are more deterministic than they look. Neither sets a seed explicitly, but
+`TrainingArguments` defaults to `seed=42` and `Trainer.__init__` calls `set_seed`, so
+shuffling and dropout *during training* are seeded. Running `python finetuning04.py` three
+times on the reference machine printed `3.9626 / 3.8433 / 0.1193` every time.
+
+Two things still move between runs, and both are questions of ordering rather than luck:
+
+- **The starting loss in `finetuning03.py`.** `AutoModelForSequenceClassification` builds the
+  randomly initialised classification head inside `setup_base_model()`, several steps before
+  the `Trainer` is constructed and seeds the RNG. That head is different in every process, so
+  the "before" figure lands somewhere new each time. The *direction* of the change is the
+  reproducible result, not the starting value.
+- **Measuring the loss before training changes the training run.** PyTorch's `DataLoader`
+  draws a base seed from the global RNG when its iterator is created — even with
+  `shuffle=False` — so the pre-training evaluation advances the generator and dropout draws
+  differently from then on. This is deterministic rather than random: skipping the "before"
+  measurement in `finetuning04.py` reproducibly gives an `eval_loss` of `3.868` where the
+  committed script gives `3.891`.
+
+Calling `transformers.set_seed(42)` at the top of `__main__`, before the model is built,
+pins both down if you need exact repeatability.
+
+`finetuning_low_rank.py` seeds nothing and is genuinely random on each run — but the cliff in
+the singular values after the second one appears every time, which is the only part of that
+output the script is trying to show.
+
 ### Reference machine
 
 Windows 11, Python 3.12.3, **CPU only** (no CUDA), torch 2.12.1+cpu, transformers 5.12.1,
 peft 0.20.0, datasets 5.0.0, accelerate 1.14.0, numpy 2.2.6, pandas 3.0.3.
-
-Your numbers will differ. Neither training script sets a global seed, so dropout and
-shuffling draw differently on each run, and the randomly initialised classification head in
-`finetuning03.py` starts somewhere new every time. As Part 1 notes, the *direction* is the
-reproducible result, not the starting value. `finetuning_low_rank.py` is the exception in
-spirit only — its matrices are random too, but the rank-2 cliff in the singular values shows
-up every time.
 
 ---
 
