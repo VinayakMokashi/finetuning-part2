@@ -66,12 +66,23 @@ class FineTuneInstructionModel:
         csv_path = Path(__file__).parent / "finetune_instruction_data.csv"
         return Dataset.from_pandas(pd.read_csv(csv_path))
 
+    def split_index(self):
+        # Normally just train_size. The twelve-row CSV smoke test is smaller than
+        # train_size + eval_size, so fall back to an 80/20 split rather than
+        # indexing off the end of it.
+        total = len(self.dataset)
+        if total >= self.train_size + self.eval_size:
+            return self.train_size
+        return max(1, int(total * 0.8))
+
     def create_train_subset(self):
-        return self.dataset.select(range(self.train_size))
+        return self.dataset.select(range(self.split_index()))
 
     def create_eval_subset(self):
         # Held out: these rows are never trained on.
-        return self.dataset.select(range(self.train_size, self.train_size + self.eval_size))
+        start = self.split_index()
+        end = min(start + self.eval_size, len(self.dataset))
+        return self.dataset.select(range(start, end))
 
     def build_prompt(self, instruction, input_text):
         # Roughly half of Alpaca's rows have no input at all, so the Input line is
@@ -184,7 +195,7 @@ class FineTuneInstructionModel:
         return self.tokenizer.batch_decode(generated, skip_special_tokens=True)
 
     def sample_prompts(self, count=4):
-        rows = self.eval_dataset.select(range(count))
+        rows = self.eval_dataset.select(range(min(count, len(self.eval_dataset))))
         prompts = [self.build_prompt(r["instruction"], r["input"]) for r in rows]
         references = [r["output"] for r in rows]
         return prompts, references
