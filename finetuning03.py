@@ -1,5 +1,12 @@
 from peft import get_peft_model, LoraConfig, PeftType
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    DataCollatorWithPadding,
+    Trainer,
+    TrainingArguments,
+    set_seed,
+)
 from datasets import load_dataset
 import torch
 import numpy as np
@@ -7,8 +14,16 @@ import numpy as np
 
 class PEFTSentimentClassifier:
     def __init__(self):
+        self.seed = 42
+        # Seed before the model is built. The classification head and the
+        # LoRA adapters are initialised randomly here, several steps before
+        # Trainer would seed anything, so without this the starting point
+        # differs on every run.
+        set_seed(self.seed)
         self.model_name = "bert-base-uncased"
+        self.max_length = 256
         self.tokenizer = self.setup_tokenizer()
+        self.data_collator = self.setup_data_collator()
         self.base_model = self.setup_base_model()
         self.peft_config = self.setup_peft_config()
         self.model = self.setup_peft_model()
@@ -47,19 +62,35 @@ class PEFTSentimentClassifier:
     def create_test_subset(self):
         return self.dataset["test"].shuffle(seed=42).select(range(100))
 
+    def setup_data_collator(self):
+        # Pad each batch to its own longest sequence rather than to a fixed 256
+        # tokens. Most IMDb reviews are shorter than the cap, so this removes a
+        # large amount of arithmetic on padding that never affected the result.
+        return DataCollatorWithPadding(tokenizer=self.tokenizer)
+
     def tokenize_function(self, examples):
-        return self.tokenizer(examples["text"], padding="max_length", truncation=True)
+        return self.tokenizer(examples["text"], truncation=True, max_length=self.max_length)
 
     def tokenize_dataset(self, dataset):
         return dataset.map(self.tokenize_function, batched=True)
+
+    def compute_metrics(self, eval_pred):
+        logits, labels = eval_pred
+        predictions = np.argmax(logits, axis=-1)
+        return {"accuracy": float((predictions == labels).mean())}
 
     def setup_training_args(self):
         return TrainingArguments(
             output_dir="./peft_results",
             eval_strategy="epoch",
-            learning_rate=1e-4,
-            per_device_train_batch_size=8,
+            learning_rate=5e-4,
+            per_device_train_batch_size=4,
+            per_device_eval_batch_size=16,
             num_train_epochs=1,
+            warmup_ratio=0.1,
+            weight_decay=0.01,
+            logging_steps=25,
+            save_strategy="no",
         )
 
     def setup_trainer(self):
@@ -68,6 +99,8 @@ class PEFTSentimentClassifier:
             args=self.training_args,
             train_dataset=self.tokenized_train,
             eval_dataset=self.tokenized_test,
+            data_collator=self.data_collator,
+            compute_metrics=self.compute_metrics,
         )
 
     def evaluate_model(self):
@@ -121,10 +154,16 @@ if __name__ == "__main__":
     peft_classifier = PEFTSentimentClassifier()
     peft_classifier.model.print_trainable_parameters()
 
+    metrics_before = peft_classifier.evaluate_model()
     loss_before = peft_classifier.evaluate_loss()
+
     peft_classifier.train_model()
+
+    metrics_after = peft_classifier.evaluate_model()
     loss_after = peft_classifier.evaluate_loss()
 
+    print(f"accuracy  before fine-tuning: {metrics_before['eval_accuracy']:.4f}")
+    print(f"accuracy  after  fine-tuning: {metrics_after['eval_accuracy']:.4f}")
     print(f"eval loss before fine-tuning: {loss_before:.4f}")
     print(f"eval loss after  fine-tuning: {loss_after:.4f}")
-    print(f"improvement: {loss_before - loss_after:.4f}")
+    print(f"loss improvement: {loss_before - loss_after:.4f}")
