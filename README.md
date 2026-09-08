@@ -12,7 +12,7 @@ model to follow written instructions, where the evidence is not a loss curve but
 model actually writes.
 
 The two training scripts follow the same shape as Part 1: **measure the pretrained model,
-train it for one epoch, measure it again**, and print the difference. Each is written as a
+train it, measure it again**, and print the difference. Each is written as a
 single class so that every stage — model, data, loss, training arguments, trainer,
 evaluation — is one named method you can read in isolation.
 
@@ -43,7 +43,7 @@ pip install -r requirements.txt
 
 python finetuning_low_rank.py   # instant, no downloads
 python finetuning03.py          # ~9 min on a laptop CPU
-python finetuning04.py          # ~25 min on a laptop CPU
+python finetuning04.py          # ~15 min on a laptop CPU
 ```
 
 `finetuning_low_rank.py` needs nothing but NumPy and finishes in under a second. The other
@@ -271,6 +271,11 @@ rows to train on and a further 200, **never trained on**, to evaluate. Holding o
 evaluation split matters more here than for a classifier: a generative model that has already
 seen its test prompts will happily recite the answers back.
 
+One thing to know before building on it: **Alpaca is licensed CC BY-NC 4.0 — non-commercial**.
+It was generated in 2023 by prompting OpenAI's `text-davinci-003`, which is why it carries a
+more restrictive licence than the MIT one on this repository. Fine for learning and research;
+check the licence before it goes anywhere near a product.
+
 ### A note on the twelve-row CSV
 
 This script began with [`finetune_instruction_data.csv`](finetune_instruction_data.csv) —
@@ -472,14 +477,21 @@ LoRA gets within striking distance of full fine-tuning while training **370× fe
 parameters**, in **under a third of the wall-clock time and a quarter of the updates**. That is
 the trade LoRA actually offers, and it is visible here.
 
-What this still does *not* establish is which method wins at equal budget, because the
-budgets are not equal — 125 updates against 500. The published result is that LoRA
-approaches full fine-tuning given comparable training; testing that properly here would mean
-setting `per_device_train_batch_size=1` to match Part 1 step for step. Note also that Part 1
-reports no accuracy, so the `0.80` figure above has nothing to compare against.
+Three caveats, because the two numbers are closer to "indicative" than "like for like":
 
-One caveat on precision: the evaluation set is 100 reviews, so a single percentage point is
-one review. Treat `0.80` as "roughly four in five", not as a measurement good to two digits.
+- **The budgets are not equal** — 125 updates against 500. The published result is that LoRA
+  approaches full fine-tuning given comparable training; testing that here would mean setting
+  `per_device_train_batch_size=1` to match Part 1 step for step.
+- **The losses are not measured on the same reviews.** Part 1 evaluates on 32 test rows, this
+  script on 100. Both draw from `stanfordnlp/imdb` with `seed=42`, so Part 1's 32 are the
+  first 32 of these 100 — a superset, but not the same set, and cross-entropy is an average.
+- **The inputs are not truncated at the same length.** Part 1 keeps 512 tokens per review;
+  this script keeps 256. Part 1's model simply saw more of each review, and sentiment often
+  arrives in a review's closing sentence.
+
+Note also that Part 1 reports no accuracy, so the `0.80` figure has nothing to compare
+against. And on precision: 100 evaluation reviews means one percentage point is one review.
+Treat `0.80` as "roughly four in five", not as a figure good to two digits.
 
 ### Reproducibility
 
@@ -554,10 +566,11 @@ the script's own location, so `finetuning04.py` itself runs correctly from any d
 **The first run is slow or appears to hang** — it is downloading model weights and the IMDb
 or Alpaca dataset. Subsequent runs read from the Hugging Face cache and start immediately.
 
-**You need to run offline, or want a result in seconds** — `finetuning04.py` ships with a
-twelve-row CSV for exactly this. Point `load_dataset()` at `load_dataset_csv()` and the whole
-pipeline runs without touching the network. It demonstrates the mechanics; it does not train
-a useful model. See [the note on the CSV](#a-note-on-the-twelve-row-csv).
+**You want a result in seconds** — `finetuning04.py` ships with a twelve-row CSV for exactly
+this. Point `load_dataset()` at `load_dataset_csv()` and the whole pipeline runs end to end in
+about four seconds, with no dataset download. (`t5-small` itself is still fetched on the first
+run, so this is only fully offline once the model is cached.) It demonstrates the mechanics;
+it does not train a useful model. See [the note on the CSV](#a-note-on-the-twelve-row-csv).
 
 **`finetuning04.py` repeats itself** — output like "Establish a strong customer relationship.
 2. Establish a strong customer relationship." is expected. Generation is greedy with no
@@ -571,8 +584,8 @@ to `generate()`, or train on more data, to reduce it.
 ```
 finetuning_low_rank.py            SVD and low-rank approximation — the maths behind LoRA
 finetuning03.py                   LoRA fine-tuning: BERT + IMDb via peft
-finetuning04.py                   Instruction fine-tuning: t5-small on a small CSV dataset
-finetune_instruction_data.csv     12 instruction / input / output rows
+finetuning04.py                   Instruction fine-tuning: t5-small on Alpaca
+finetune_instruction_data.csv     12 instruction / input / output rows (offline smoke test)
 requirements.txt                  Pinned lower bounds for the whole stack
 ```
 

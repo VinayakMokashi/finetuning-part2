@@ -10,7 +10,7 @@ peft>=0.17
 datasets>=4.0
 huggingface-hub>=1.0
 
-# finetuning04.py: reading the instruction dataset from CSV
+# finetuning04.py: reading the twelve-row CSV used as an offline smoke test
 pandas>=2.0
 
 # finetuning_low_rank.py and the manual cross-entropy implementations
