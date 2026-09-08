@@ -6,8 +6,10 @@ pretrained model. This repository asks the obvious follow-up question: do you ha
 Three scripts answer it, and they are meant to be read in order. The first is pure linear
 algebra and proves that a large weight matrix can sometimes be replaced by two very small
 ones with no loss at all. The second uses exactly that fact to fine-tune BERT by training
-0.27% of its parameters. The third steps sideways to a different kind of fine-tuning
-altogether — teaching an encoder-decoder model to follow instructions.
+0.27% of its parameters, reaching 80% accuracy on a task it started at chance. The third
+steps sideways to a different kind of fine-tuning altogether — teaching an encoder-decoder
+model to follow written instructions, where the evidence is not a loss curve but what the
+model actually writes.
 
 The two training scripts follow the same shape as Part 1: **measure the pretrained model,
 train it for one epoch, measure it again**, and print the difference. Each is written as a
@@ -18,10 +20,10 @@ evaluation — is one named method you can read in isolation.
 | --- | --- | --- | --- | --- |
 | [`finetuning_low_rank.py`](finetuning_low_rank.py) | Low-rank matrix approximation | — (NumPy only) | synthetic | SVD, rank truncation, and why LoRA's `ΔW = B·A` is not an approximation hack |
 | [`finetuning03.py`](finetuning03.py) | Binary sentiment classification | [`bert-base-uncased`](https://huggingface.co/bert-base-uncased) | [`stanfordnlp/imdb`](https://huggingface.co/datasets/stanfordnlp/imdb) | LoRA with `peft`, adapter injection, cross-entropy implemented from scratch in NumPy |
-| [`finetuning04.py`](finetuning04.py) | Instruction following | [`t5-small`](https://huggingface.co/t5-small) | [`finetune_instruction_data.csv`](finetune_instruction_data.csv) (12 rows, in-repo) | Seq2seq preprocessing, `-100` label masking, and encoder-decoder loss |
+| [`finetuning04.py`](finetuning04.py) | Instruction following | [`t5-small`](https://huggingface.co/t5-small) | [`tatsu-lab/alpaca`](https://huggingface.co/datasets/tatsu-lab/alpaca) (2,000 rows) | Seq2seq preprocessing, `-100` label masking, held-out generation, and encoder-decoder loss |
 
 Like Part 1, these are deliberately sized to finish on a laptop CPU — 500 training reviews
-and 10 instruction examples — not to produce competitive models.
+and 2,000 instruction examples — not to produce competitive models.
 
 ---
 
@@ -40,18 +42,21 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 python finetuning_low_rank.py   # instant, no downloads
-python finetuning03.py          # ~20 min on a laptop CPU
-python finetuning04.py          # ~1 min on a laptop CPU
+python finetuning03.py          # ~9 min on a laptop CPU
+python finetuning04.py          # ~25 min on a laptop CPU
 ```
 
 `finetuning_low_rank.py` needs nothing but NumPy and finishes in under a second. The other
-two download their model and dataset from the Hugging Face Hub on first run — 421 MB for
-BERT, 233 MB for T5 and 80 MB for IMDb, about 750 MB in total, cached under
-`~/.cache/huggingface`. No account, token or API key is required.
+two download their models and datasets from the Hugging Face Hub on first run — 421 MB for
+BERT, 233 MB for T5, 80 MB for IMDb and 24 MB for Alpaca, about 760 MB in total, cached
+under `~/.cache/huggingface`. No account, token or API key is required.
 
-**Requirements:** Python 3.10 or newer — verified on 3.12. Budget roughly **2 GB of free
-disk space**: ~750 MB of downloads plus training checkpoints. A GPU is optional — see
-[Running on a GPU](#running-on-a-gpu).
+**Requirements:** Python 3.10 or newer — verified on 3.12. Budget roughly **1 GB of free
+disk space**; neither script writes checkpoints, so the downloads are nearly all of it. A GPU
+is optional — see [Running on a GPU](#running-on-a-gpu).
+
+In a hurry? `finetuning04.py` has a twelve-row CSV built in for exactly that — see
+[the smoke test](#a-note-on-the-twelve-row-csv).
 
 ---
 
@@ -130,11 +135,12 @@ The same task as `finetuning02.py` in Part 1 — binary sentiment on IMDb movie 
 `bert-base-uncased`, on the same 500-review training subset — but trained with LoRA instead
 of updating every weight.
 
-Two training settings differ from Part 1 deliberately. The evaluation subset is 100 reviews
-rather than 32, and the learning rate is `1e-4` rather than `2e-5`. That second change is
-the standard adjustment when moving to LoRA: the adapters are randomly initialised and few
-in number, so they tolerate — and need — a learning rate roughly an order of magnitude
-larger than the one you would use to nudge pretrained weights.
+The evaluation subset is 100 reviews rather than Part 1's 32, and the learning rate is
+`5e-4` rather than `2e-5`. That second difference is the standard adjustment when moving to
+LoRA: the adapters start from scratch and there are very few of them, so they tolerate — and
+need — a learning rate more than an order of magnitude larger than the one you would use to
+nudge pretrained weights. Getting this wrong is not a subtle failure, as the
+[training budget](#the-training-budget-matters-more-than-it-looks) section below shows.
 
 ### How it works
 
@@ -185,25 +191,69 @@ Subtracting the maximum leaves the softmax mathematically unchanged.
 
 This implementation is verified rather than assumed. Because there is exactly one label per
 example, the per-example average it computes is the same quantity the `Trainer` reports, and
-on the full run below the two agreed to every digit the `Trainer` prints: `0.6816` against
-`0.6816`.
+on the run below the two agreed to every digit the `Trainer` prints: `0.4661` against
+`0.4661`.
+
+### The training budget matters more than it looks
+
+An earlier version of this script trained with a learning rate of `1e-4` and a batch size of
+8, and produced this:
+
+```
+eval loss before fine-tuning: 0.6862
+eval loss after  fine-tuning: 0.6816
+```
+
+A two-way classifier with no opinion whatsoever scores `ln(2) ≈ 0.6931`. That run therefore
+started at chance and finished at chance. The adapters were configured correctly the whole
+time — they were simply never pushed hard enough to learn anything. Three things fixed it:
+
+- **More updates.** 500 reviews at batch size 8 is 63 optimiser steps. Dropping the batch
+  size to 4 doubles that to 125 for exactly the same data and roughly the same wall clock.
+- **A much higher learning rate**, `5e-4` with 10% warmup, for the reason given above.
+- **Dynamic padding.** Every review used to be padded to 512 tokens regardless of length.
+  Padding each batch to its own longest sequence instead, capped at 256 tokens, is where the
+  compute for the extra updates came from — the run got *faster*, from 17 minutes to 7.
+
+The lesson generalises: when a parameter-efficient method appears not to work, suspect the
+training budget before the method.
+
+### One epoch is deliberate
+
+Running three epochs instead of one is worse, and the script's own per-epoch evaluation says
+so:
+
+| Epoch | Training loss | Eval loss | Eval accuracy |
+| --- | --- | --- | --- |
+| 1 | 0.4433 | **0.3858** | 0.88 |
+| 2 | 0.2536 | 0.5830 | 0.85 |
+| 3 | 0.2047 | 0.5669 | 0.88 |
+
+Training loss keeps falling while evaluation loss climbs after epoch 1 — the model is
+memorising 500 reviews rather than learning sentiment. Epochs 2 and 3 cost fourteen minutes
+and bought nothing. This is a within-run comparison, so it is not an artefact of
+initialisation luck.
 
 ### What to expect
 
 ```
 trainable params: 296,450 || all params: 109,780,228 || trainable%: 0.2700
-{'eval_loss': '0.6816', 'eval_runtime': '42.92', 'epoch': '1'}
-{'train_runtime': '1026', 'train_loss': '0.6772', 'epoch': '1'}
-eval loss before fine-tuning: 0.6862
-eval loss after  fine-tuning: 0.6816
-improvement: 0.0045
+{'eval_loss': '0.4661', 'eval_accuracy': '0.8', 'epoch': '1'}
+{'train_runtime': '440.7', 'train_loss': '0.6039', 'epoch': '1'}
+accuracy  before fine-tuning: 0.5100
+accuracy  after  fine-tuning: 0.8000
+eval loss before fine-tuning: 0.6964
+eval loss after  fine-tuning: 0.4661
+loss improvement: 0.2303
 ```
 
-The starting value sits just under `ln(2) ≈ 0.6931`, which is exactly where a randomly
-initialised 2-way head belongs — the model begins with no opinion about sentiment. After one
-epoch the loss has moved, but barely. **That small number is the honest result, and it is
-worth sitting with rather than explaining away** — see
-[Verified results](#verified-results) below for what it does and does not tell you.
+The starting point is the interesting part. Accuracy of `0.51` on a balanced two-way task is
+a coin flip, and the loss of `0.6964` sits right at `ln(2) ≈ 0.6931` — exactly where a
+randomly initialised head belongs. The model genuinely begins with no opinion about
+sentiment.
+
+After 125 optimiser updates, training 0.27% of its weights, it gets **four reviews in five
+right**.
 
 ---
 
@@ -215,39 +265,60 @@ The first two scripts classify. This one *generates*. `t5-small` is an encoder-d
 and the goal is to teach it to follow written instructions: given an instruction and an
 input, produce the requested output.
 
-The dataset is [`finetune_instruction_data.csv`](finetune_instruction_data.csv), twelve
-hand-written examples covering summarisation, translation, sentiment classification,
-grammar correction, paraphrasing and more. Ten rows train, two evaluate. `load_dataset_dict`
-is kept in the script as the in-code source of that same data, so you can read the examples
-without opening the CSV.
+The dataset is [`tatsu-lab/alpaca`](https://huggingface.co/datasets/tatsu-lab/alpaca), 52,002
+instruction / input / output rows. The script shuffles once with a fixed seed and takes 2,000
+rows to train on and a further 200, **never trained on**, to evaluate. Holding out an
+evaluation split matters more here than for a classifier: a generative model that has already
+seen its test prompts will happily recite the answers back.
+
+### A note on the twelve-row CSV
+
+This script began with [`finetune_instruction_data.csv`](finetune_instruction_data.csv) —
+twelve hand-written rows covering summarisation, translation, sentiment classification,
+grammar correction and paraphrasing. It is still in the repository, and `load_dataset_csv()`
+still reads it, because it makes a genuinely useful smoke test: point `load_dataset()` at it
+to exercise the entire pipeline in seconds, offline.
+
+What it cannot do is teach instruction following. Ten training rows is not a small dataset,
+it is a *demonstration* — and training on it for more epochs does not fix that, it only
+memorises ten answers. The loss falls impressively while the model gets worse at everything
+it has not seen. Real instruction tuning starts in the tens of thousands of examples, which
+is why the default moved to Alpaca.
 
 ### Prompt construction
 
 Each row is flattened into a single string that the encoder reads:
 
 ```python
-f"Instruction: {inst}\nInput: {inp}"
+f"Instruction: {instruction}\nInput: {input_text}"
 ```
 
 The target is the expected output. Nothing about this format is magic — what matters is that
 it is *consistent*, so the model can learn that the text after `Instruction:` describes the
 transformation to apply to the text after `Input:`.
 
+Roughly half of Alpaca's rows have an empty `input` field — "Give three tips for staying
+healthy" needs no operand. Those rows drop the `Input:` line entirely rather than emitting a
+dangling empty one, so the model never has to make sense of a trailing `Input:` with nothing
+after it.
+
 ### Label masking, and why it matters
 
-Targets are padded to a fixed length, and those pad positions must not be treated as tokens
+Batches are padded to a common length, and those pad positions must not be treated as tokens
 the model was supposed to predict. Every pad in the labels is therefore replaced with `-100`,
-PyTorch's conventional ignore index:
+PyTorch's conventional ignore index. `DataCollatorForSeq2Seq` does this while it pads:
 
 ```python
-model_inputs["labels"] = [
-    [token if token != self.tokenizer.pad_token_id else -100 for token in seq]
-    for seq in labels
-]
+DataCollatorForSeq2Seq(
+    tokenizer=self.tokenizer,
+    model=self.model,
+    label_pad_token_id=-100,
+)
 ```
 
-Skip this and the loss is dominated by the trivial task of predicting padding — the number
-goes down, the model does not get better. Two pieces of machinery then rely on the
+Skip this — pad the labels with the tokeniser's ordinary pad token, as an earlier version of
+this script did — and the loss is dominated by the trivial task of predicting padding. The
+number goes down and the model does not get better. Two pieces of machinery rely on the
 convention:
 
 - `torch.nn.CrossEntropyLoss`, used internally by T5, ignores `-100` positions outright, and
@@ -273,30 +344,79 @@ They will not match exactly, and the reason is worth understanding: `evaluate_lo
 per **example** (a macro average), whereas the `Trainer` averages per **token** (a micro
 average). Examples with longer targets carry more weight in the second.
 
-This was checked directly. On one run, the two evaluation rows scored 3.9070 and 3.7611 over
-11 and 4 real target tokens respectively. Averaging them per example gives 3.8340; weighting
-them by token count gives 3.8681 — and the `Trainer` reported `eval_loss` of 3.868 on that
-same run. Neither number is wrong; they answer slightly different questions.
+Measured on the untrained model over the 200 held-out rows:
 
-Those figures come from a run that skipped the pre-training measurement, so they do not line
-up with the ones in the next section. That is not noise — see
-[Reproducibility](#reproducibility).
+| Quantity | Value |
+| --- | --- |
+| `evaluate_loss()`, the from-scratch NumPy version | `3.9710` |
+| The same batches scored by PyTorch's own `CrossEntropyLoss` | `3.9711` |
+| The same batches, weighted by token count instead | `3.9418` |
+| `Trainer.evaluate()` | `3.9582` |
+
+The first two lines are the verification: **the hand-written NumPy cross-entropy agrees with
+PyTorch's own implementation to four decimal places** on identical batches.
+
+The remaining spread is not error, it is normalisation. Cross-entropy is averaged over the
+real tokens *within each batch*, and then the batches are averaged together. That makes the
+final number depend on how examples were grouped: `evaluate_loss` uses batches of 4 while
+`Trainer` uses 8, which is the whole of the difference between `3.9710` and `3.9582`.
+Weighting every token equally across the entire split instead gives a third answer, `3.9418`.
+
+None of the three is wrong. It is worth knowing that a reported loss carries a batch size
+with it, and that comparing losses comes with a quiet assumption that the batching matched.
 
 ### What to expect
 
 ```
-eval loss before fine-tuning: 3.9626
-eval loss after  fine-tuning: 3.8433
-improvement: 0.1193
+eval loss before fine-tuning: 3.9710
+eval loss after  fine-tuning: 2.9116
+improvement: 1.0594
 ```
 
-**Read this script for its mechanics, not its results.** Ten training examples and one epoch
-cannot teach instruction following — real instruction tuning uses tens of thousands of
-examples at minimum. What the loss drop confirms is that the pipeline is wired correctly and
-gradients are flowing to the right places. To make it a genuine experiment, point
-`load_dataset` at a real instruction dataset such as
-[`tatsu-lab/alpaca`](https://huggingface.co/datasets/tatsu-lab/alpaca) and raise
-`num_train_epochs`.
+The loss is the smaller half of the story. The script also prints what the model actually
+writes, on prompts it was never trained on — and that is where the change is legible.
+
+**Before**, `t5-small` does not follow instructions at all. It mostly echoes the prompt back
+verbatim:
+
+```
+prompt    : Instruction: Create a set of guidelines for businesses to follow in order to build customer trust.
+generated : Instruction: Create a set of guidelines for businesses to follow in order to build customer trust.
+```
+
+Occasionally something stranger surfaces — this prompt made it start translating into German:
+
+```
+prompt    : Instruction: A new restaurant has opened up in town. Come up with six menu items ...
+generated : Instruction: Inserieren Sie sich auf einen neuen Restaurant in Town. Come up with six menu items ...
+```
+
+That is not a bug, it is T5's pretraining showing through. T5 was trained on a mixture of
+tasks introduced by short text prefixes, translation among them, so a sentence beginning
+`Instruction:` lands in a familiar-looking but wrong place.
+
+**After** two epochs on 2,000 examples, it attempts the task:
+
+```
+prompt    : Instruction: Create a set of guidelines for businesses to follow in order to build customer trust.
+generated : 1. Establish a strong customer relationship with a customer. 2. Establish a strong customer relationship with a customer. 2. Establish a strong customer relatio
+
+prompt    : Instruction: Create a dialogue between two people that incorporates the given ideas.
+            Input: Ideas: money saving tips, weekly budget
+generated : The idea of money saving tips is to create a weekly budget. It is a way to get started by focusing on the basics of the budget, focusing on the budget, and focu
+```
+
+**This is progress, not success, and the difference matters.** The model has learned the
+*shape* of the task — it stops echoing, produces a numbered list when asked for guidelines,
+and picks up "money saving tips" and "weekly budget" from the input. It has not learned to
+write well: it falls into repetition loops, and the second answer is a description of a
+dialogue rather than a dialogue.
+
+Both failures are expected here. `t5-small` is 60M parameters, greedy decoding has no
+repetition penalty, and 2,000 examples is a rounding error next to the 52,002 available. The
+honest summary is that the pipeline demonstrably teaches instruction *following*, and that
+teaching instruction following *well* is a different-sized problem. Raise `train_size` and
+`num_train_epochs`, or move to `t5-base`, to push it further.
 
 ---
 
@@ -309,73 +429,87 @@ Measured on the reference machine below, running each script exactly as committe
 | Metric | Value |
 | --- | --- |
 | Trainable parameters | `296,450` of `109,780,228` (**0.27%**) |
-| Eval cross-entropy, **before** fine-tuning | `0.6862` |
-| Eval cross-entropy, **after** fine-tuning | `0.6816` |
-| Change | **-0.0045** |
-| Final training loss | `0.6772` |
-| Training wall-clock (63 steps) | ~17 min |
+| Eval accuracy, **before** fine-tuning | `0.5100` |
+| Eval accuracy, **after** fine-tuning | **`0.8000`** |
+| Eval cross-entropy, **before** fine-tuning | `0.6964` |
+| Eval cross-entropy, **after** fine-tuning | `0.4661` |
+| Loss change | **-0.2303** |
+| Final training loss | `0.6039` |
+| Training wall-clock (125 steps) | ~7 min 20 s |
 
 ### `finetuning04.py` — instruction tuning t5-small
 
+Evaluated on 200 Alpaca rows that were never trained on.
+
 | Metric | Value |
 | --- | --- |
-| Eval loss, **before** fine-tuning | `3.9626` |
-| Eval loss, **after** fine-tuning | `3.8433` |
-| Change | **-0.1193** |
-| Final training loss | `4.055` |
-| Training wall-clock (2 steps) | ~17 s |
+| Eval loss, **before** fine-tuning | `3.9710` |
+| Eval loss, **after** fine-tuning | **`2.9116`** |
+| Change | **-1.0594** |
+| Eval loss after epoch 1 / epoch 2 | `2.944` / `2.909` |
+| Final training loss | `3.155` |
+| Training wall-clock (500 steps) | ~14 min |
 
-### Reading the LoRA number honestly
+Unlike `finetuning03.py`, this one is **not** overfitting — evaluation loss was still falling
+between epoch 1 and epoch 2. 2,000 examples is enough data that two epochs does not exhaust
+it, so raising `num_train_epochs` here is a reasonable thing to try, where in the LoRA script
+it was actively harmful.
 
-Part 1 fine-tuned *the same model on the same 500 IMDb reviews* and moved the loss from
-`0.6809` to `0.3024` — a change of `-0.3784`, roughly eighty times larger than the `-0.0045`
-here. It would be easy to read that as "LoRA is much worse". It is not that simple, and
-three things differ at once:
+### Comparing against Part 1, carefully
 
-1. **Optimiser steps: 63 versus 500.** Part 1 used `per_device_train_batch_size=1`, so 500
-   examples meant 500 gradient updates. This script uses batch size 8, so the same data
-   yields 63. That is an eight-fold reduction in updates and is very likely the largest
-   single factor.
-2. **Trainable parameters: 0.27% versus 100%.** Fewer degrees of freedom means less can
-   change per step, by design.
-3. **The classification head.** In both cases it starts random, but here it is being learned
-   through far fewer updates.
+Part 1 fine-tuned *the same model on the same 500 IMDb reviews*, updating every weight, and
+reached a loss of `0.3024`. This script reaches `0.4661`. Full fine-tuning still wins on
+loss — but it is worth being precise about what each side spent:
 
-The published LoRA result is that it *approaches* full fine-tuning given a comparable
-training budget — not that it matches it after 63 steps. Nothing in this repository
-establishes the comparison either way, because the budgets were never equalised. If you want
-to test it properly, set `per_device_train_batch_size=1` in `setup_training_args` to match
-Part 1 step for step, or raise `num_train_epochs` until the update counts line up.
+| | Part 1 (full) | Here (LoRA) |
+| --- | --- | --- |
+| Trainable parameters | 109,780,228 | **296,450** |
+| Optimiser updates | 500 | 125 |
+| Eval cross-entropy | **0.3024** | 0.4661 |
+| Training wall-clock | ~25 min | **~7 min** |
 
-What this run *does* establish is the parameter accounting: a 110M-parameter model was
-adapted by training 296,450 weights, and the loss moved in the right direction.
+LoRA gets within striking distance of full fine-tuning while training **370× fewer
+parameters**, in **under a third of the wall-clock time and a quarter of the updates**. That is
+the trade LoRA actually offers, and it is visible here.
+
+What this still does *not* establish is which method wins at equal budget, because the
+budgets are not equal — 125 updates against 500. The published result is that LoRA
+approaches full fine-tuning given comparable training; testing that properly here would mean
+setting `per_device_train_batch_size=1` to match Part 1 step for step. Note also that Part 1
+reports no accuracy, so the `0.80` figure above has nothing to compare against.
+
+One caveat on precision: the evaluation set is 100 reviews, so a single percentage point is
+one review. Treat `0.80` as "roughly four in five", not as a measurement good to two digits.
 
 ### Reproducibility
 
-These scripts are more deterministic than they look. Neither sets a seed explicitly, but
-`TrainingArguments` defaults to `seed=42` and `Trainer.__init__` calls `set_seed`, so
-shuffling and dropout *during training* are seeded. Running `python finetuning04.py` three
-times on the reference machine printed `3.9626 / 3.8433 / 0.1193` every time.
+Both training scripts call `set_seed(42)` as the very first thing they do, and the placement
+is the point.
 
-Two things still move between runs, and both are questions of ordering rather than luck:
+`TrainingArguments` already defaults to `seed=42`, and `Trainer.__init__` calls `set_seed`
+on your behalf — so it is easy to assume the job is done. It is not, because `Trainer` is
+constructed *last*. In `finetuning03.py` the classification head and the LoRA adapters are
+initialised several steps earlier, in `setup_base_model()` and `setup_peft_model()`, while
+the RNG is still wherever the process happened to leave it. Everything the `Trainer` seeds is
+downstream of a starting point that was never seeded at all.
 
-- **The starting loss in `finetuning03.py`.** `AutoModelForSequenceClassification` builds the
-  randomly initialised classification head inside `setup_base_model()`, several steps before
-  the `Trainer` is constructed and seeds the RNG. That head is different in every process, so
-  the "before" figure lands somewhere new each time. The *direction* of the change is the
-  reproducible result, not the starting value.
-- **Measuring the loss before training changes the training run.** PyTorch's `DataLoader`
-  draws a base seed from the global RNG when its iterator is created — even with
-  `shuffle=False` — so the pre-training evaluation advances the generator and dropout draws
-  differently from then on. This is deterministic rather than random: skipping the "before"
-  measurement in `finetuning04.py` reproducibly gives an `eval_loss` of `3.868` where the
-  committed script gives `3.891`.
+That is not a theoretical concern. Final accuracy landed at `0.88`, `0.79` and `0.80` across
+three runs during development — a nine-point spread on a 100-review evaluation set. Those
+runs were not a controlled seed experiment (they differed in epoch count as well), so the
+spread cannot be attributed to initialisation alone. But it is wide enough to make the point:
+while the starting weights are redrawn on every run, a difference between two hyperparameter
+settings and a difference between two lucky draws are indistinguishable. Two processes now
+produce byte-identical initial weights, verified directly.
 
-Calling `transformers.set_seed(42)` at the top of `__main__`, before the model is built,
-pins both down if you need exact repeatability.
+One further ordering effect is worth knowing about, because it survives seeding and is
+deterministic rather than random: PyTorch's `DataLoader` draws a base seed from the global
+RNG when its iterator is created, *even with* `shuffle=False`. Measuring the loss before
+training therefore advances the generator and changes the dropout draws during training. It
+is reproducible — the same code takes the same path every time — but it means "evaluate then
+train" and "train only" are genuinely different experiments.
 
-`finetuning_low_rank.py` seeds nothing and is genuinely random on each run — but the cliff in
-the singular values after the second one appears every time, which is the only part of that
+`finetuning_low_rank.py` seeds nothing and is random on each run by design. The cliff in the
+singular values after the second one appears every time, which is the only part of that
 output the script is trying to show.
 
 ### Reference machine
@@ -394,9 +528,12 @@ automatically when a GPU is visible, so the only change needed is a CUDA build o
 pip install torch --index-url https://download.pytorch.org/whl/cu124
 ```
 
-Once a GPU is present it is worth raising `per_device_train_batch_size` in
-`setup_training_args`, and enabling mixed precision with `fp16=True` (or `bf16=True` on
-Ampere and newer).
+Once a GPU is present, enable mixed precision with `fp16=True` (or `bf16=True` on Ampere and
+newer). Raising `per_device_train_batch_size` is the usual next step, but do it deliberately
+in `finetuning03.py`: batch size there is what sets the number of optimiser updates, and
+too few updates is precisely what made the original version of that script fail to learn.
+Doubling the batch halves the updates, so raise `num_train_epochs` to compensate — and
+re-check the per-epoch evaluation loss, because more epochs overfit 500 reviews quickly.
 
 ---
 
@@ -415,7 +552,17 @@ created wherever you launch Python from. The dataset CSV, by contrast, is resolv
 the script's own location, so `finetuning04.py` itself runs correctly from any directory.
 
 **The first run is slow or appears to hang** — it is downloading model weights and the IMDb
-dataset. Subsequent runs read from the Hugging Face cache and start immediately.
+or Alpaca dataset. Subsequent runs read from the Hugging Face cache and start immediately.
+
+**You need to run offline, or want a result in seconds** — `finetuning04.py` ships with a
+twelve-row CSV for exactly this. Point `load_dataset()` at `load_dataset_csv()` and the whole
+pipeline runs without touching the network. It demonstrates the mechanics; it does not train
+a useful model. See [the note on the CSV](#a-note-on-the-twelve-row-csv).
+
+**`finetuning04.py` repeats itself** — output like "Establish a strong customer relationship.
+2. Establish a strong customer relationship." is expected. Generation is greedy with no
+repetition penalty, and `t5-small` is small. Pass `repetition_penalty` or `no_repeat_ngram_size`
+to `generate()`, or train on more data, to reduce it.
 
 ---
 
@@ -429,8 +576,10 @@ finetune_instruction_data.csv     12 instruction / input / output rows
 requirements.txt                  Pinned lower bounds for the whole stack
 ```
 
-Training checkpoints are written to `./peft_results` and `./instruction_result`, both
-git-ignored — they are large and reproducible by re-running the scripts.
+`./peft_results` and `./instruction_result` are the `Trainer` output directories. Both
+scripts set `save_strategy="no"`, so no checkpoints are written and the directories stay
+empty; they are git-ignored regardless. Raise `save_strategy` if you want to keep a
+fine-tuned model, and expect roughly 1.3 GB per saved BERT checkpoint.
 
 ---
 
